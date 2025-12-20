@@ -12,21 +12,21 @@ memory_client = MemoryClient(region_name=REGION)
 memory_name = "dev_gap_expection_memory"
 
 def create_memory_resource():
-    strategies = [
+    strategies =[
         {
             StrategyType.USER_PREFERENCE.value: {
                 "name": "dev_gap_exception_user_preference",
                 "description": "Captures customer preferences and behavior",
                 "namespace": ["askai/search/gapException/{actorID}/preferences"],
-                }
-            },
-            {
-                StrategyType.SEMANTIC.value: {
-                    "name": "dev_gap_exception_semantic",
-                    "description": "Stores facts from conversation"
-                    "namespace": ["askai/search/gapException/{actorID}/semantic"],
-                }
-            }        
+            }
+        },
+        {
+            StrategyType.SEMANTIC.value: {
+                "name": "dev_gap_exception_semantic",
+                "description": "Stores facts from conversation",
+                "namespace": ["askai/search/gapException/{actorID}/semantic"],
+            }
+        },        
     ]
     logger.info("Creating AgentCore Memory Resource. This can a couple of minutes...")
     # *** AGENTIC MEMORY USAGE *** - Create memory resourse and user_pref strategy

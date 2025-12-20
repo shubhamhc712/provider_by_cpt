@@ -15,6 +15,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.info("Starting MCP Server")
 
+httpx_client = AsyncClient()
+setting = MCPSetting()
+
 @mcp.tool(description="The service to pull various provider data for gap exception project")
 async def gap_exception_service(
     cpt_codes: Optional[List[str]],

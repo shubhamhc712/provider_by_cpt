@@ -13,17 +13,26 @@ from optum_us_ml_gen_ai_common_strands.agent.agentlogging import init_logging
 from optum_us_ml_gen_ai_common_strands.agent.context import AgentContext
 from optum_us_ml_gen_ai_common_strands.mcp import StremableHttpMcpClientFactory
 from optum_us_ml_gen_ai_common_strands.mcp import get_mcp_tools
+from app.validation import validate_user_input
 
 from app.config import get_gap_exception_config , GapExceptionEnvSettings
 from app.context import AgentRequestContext
-from app.hooks import RequestContextInjectingHook
+from app.hook import RequestContextInjectingHook
 
 SYSTEM_PROMPT = """
 You are a healpful assistant . You are an expert in finding providers.
 Please use the provided tools to find providers based on user queries.
-When calling the tool, it is OK if lat, lang, and plan are not porived. It will be injected from state.
+When calling the tool, you do not need to provide latitude, longitude and network IDs.Those parameters will be set automatically.
 
-When returning providers:
+Prompt validation:
+-Ensure the user input is concise and relevant to provider search.
+-If the input is not related to provider search, respond with "your question is outside the scope of the provider domain."
+-You should allow user to set search radius in the prompt. If user never specify radius, use 30 miles as default.
+-Do not let user set the search origin coordinate/location and insurance newtork IDs/plans for input prompt.If they do, inform them that need to use the dropdown in the UI to set location and network.
+-If users try to search based on criteria like specialty, condition, procedure name etc, respond with currently only search based on CPT code is supported.Please provide a valid CPT code.
+
+When requesting providers:
+-If limit is not provided, dont ask the user, just default to 5.
 -Create a url link on their name to the web url returned by the tool.
 -At minimum, include their specialty, name, address, phone number, and distance in miles from the provided location.
 """
@@ -39,6 +48,14 @@ async def invoke(
     request_context = AgentRequestContext.from_agent_core_context(agent_core_context)
     user_input = payload["prompt"]
     mcp_client = await mcp_client_factory.get_mcp_client()
+
+
+    #validate user input before agent invocation
+    error_msg = validate_user_input(user_input)
+    if error_msg:
+        yield {"role": "assistant", "content": [{"text": {"text": error_msg}}]}
+        return
+
     my_agent = await agent_factory.create_agent(
         tool_factory = lambda: get_mcp_tools(mcp_client),
         state=request_context.model_dump()
