@@ -1,15 +1,65 @@
-from typing import Optional, List, Any, Mapping
-from unittest import result
+from typing import Dict, Optional, List, Any, Mapping
+from urllib.parse import urldecode
 
 from geopy.distance import great_circle 
 from pydantic import BaseModel, Field
+from typing_extensions import Self
+
+def get_primary_specialty(primary_taxonomy: Dict[str, Any]) :
+    primary_taxonomy_doc = primary_taxonomy.get("primary")
+    return None if not primary_taxonomy_doc or not primary_taxonomy_doc.get("taxonomyCodes") else Code(
+        code=primary_taxonomy_doc.get("taxonomyCodes"),
+        description=primary_taxonomy_doc.get("taxonomyDescription")
+    )
+
+def get_distance_in_miles(address, origin):
+    if origin is not None and address is not None and address.geo_code is not None:
+        distance_in_miles = round(
+            great_circle(
+                (origin.lat, origin.lng),
+                (address.geo_code.lat, address.geo_code.lng)
+            ).miles,
+            2
+        )
+    return None
+
+class Code(BaseModel):
+    code: str = Field(
+        description="The code value."
+    )
+    description: Optional [str] = Field(
+        description="The code description.",
+        default=None
+    )
+
+class LocationInput(BaseModel):
+    lat: Optional[float] = Field(
+        description="The latitude for location-based search.",
+        default=None
+    )
+    lng: Optional[float] = Field(
+        description="The longitude for location-based search.",
+        default=None
+    )
+    radius_in_meters: float = Field(
+        description="The search radius in meters. It will be ignored if lat/lng is not provided.",
+        default=48280.3 # 30 miles in meters
+    )
+
+    def get_search_origin(self):
+        result = None
+        if self.lat is not None and self.lng is not None:
+            result = GeoCode(lat=self.lat, lng=self.lng)
+        return result
 
 class SearchInput (BaseModel):
     cpt_codes: Optional [List [str]] = Field(
-        description="The CPT code to search for.",
-        default=None
+        description="The CPT code to search for.Maximum number of CPT codes is 30.",
+        default=None,
+        max_length=30
     )
-    lat: Optional [float] = Field(
+
+    network_ids: List[str] = Field(
         description="The latitude for location-based search.",
         default=None
     )
@@ -30,8 +80,8 @@ class SearchInput (BaseModel):
         default=0
     )
     limit: Optional [int] = Field(
-        description="Maximum number of results to return",
-        default=5
+        description="Maximum number of results to return. Default is 10",
+        default=10
     )
 
     def get_search_origin(self):
