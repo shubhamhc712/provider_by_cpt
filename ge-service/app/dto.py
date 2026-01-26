@@ -2,14 +2,13 @@ from typing import Dict, Optional, List, Any, Mapping
 from urllib.parse import urldecode
 
 from geopy.distance import great_circle 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing_extensions import Self
 
 def get_primary_specialty(primary_taxonomy: Dict[str, Any]) :
-    primary_taxonomy_doc = primary_taxonomy.get("primary")
-    return None if not primary_taxonomy_doc or not primary_taxonomy_doc.get("taxonomyCodes") else Code(
-        code=primary_taxonomy_doc.get("taxonomyCodes"),
-        description=primary_taxonomy_doc.get("taxonomyDescription")
+    return None if not primary_taxonomy or not primary_taxonomy.get("taxonomyCodes") else Code(
+        code=primary_taxonomy.get("taxonomyCodes"),
+        description=primary_taxonomy.get("taxonomyDescription")
     )
 
 def get_distance_in_miles(address, origin):
@@ -52,7 +51,7 @@ class LocationInput(BaseModel):
             result = GeoCode(lat=self.lat, lng=self.lng)
         return result
 
-class SearchInput (BaseModel):
+class SearchInput (LocationInput):
     cpt_codes: Optional [List [str]] = Field(
         description="The CPT code to search for.Maximum number of CPT codes is 30.",
         default=None,
@@ -61,49 +60,79 @@ class SearchInput (BaseModel):
 
     network_ids: List[str] = Field(
         description="The latitude for location-based search.",
-        default=None
+        default=[]
     )
-    lng: Optional [float] = Field(
-        description="The longitude for location-based search.",
-        default=None
-    )
-    radius_in_meters: float = Field(
-        description="The search radius in meters. It will be ignored if lat/lng is not provided.",
-        default=48280.3 # 30 miles in meters
-    )
-    plan: Optional [str] = Field(
-        description="The member insurance plan to consider during the search.",
-        default=None
-    )
-    skip: Optional [int] = Field(
+    skip: int = Field(
         description="Number of records to skip, for pagination",
         default=0
     )
-    limit: Optional [int] = Field(
-        description="Maximum number of results to return. Default is 10",
-        default=10
+    limit: int = Field(
+        description="Maximum number of results to return. Default is 10. Cant be more than 20.",
+        default=10,
+        le=20,
+        ge=1
     )
 
-    def get_search_origin(self):
-      result = None
-      if self.lat is not None and self.lng is not None:
-         result = GeoCode(lat=self.lat, lng=self.lng)
-      return result
+    def get_network_ids(self) -> List[str]:
+        """
+        This will get the network ids. It will parse each entry in the self.network_ids and split by comma.
+        :retrun: List of network ids
+        """
+        original = self.network_ids
+        return self.normalize_items(original)
+    
+    def get_cpt_codes(self) -> List[str]:
+        return (item.upper() for item in self.normalize_items(self.cpt_codes))
+    
+    @staticmethod
+    def normalize_iteam(original):
+        result: List[str] = []
+        if original:
+            for item in original:
+                parts = [part.strip() for part in item.split(",") if part.strip()]
+                result.extend(parts)
+        return result
 
-class Degree(BaseModel):
-    code: str = Field(
-        description="The degree code, e.g., DMD"
-    )
-    description: str = Field(
-        description="The degree description, e.g., Doctor of Dental Medicine"
-    )
+    @model_validator(mode="after")
+    def validate_search_input(self) -> Self:
+        cpt_codes = self.get_cpt_codes()
+        if len(cpt_codes) > 30:
+            raise ValueError("Maximum number of CPT codes allowed is 30.")
+        return self
+
 class GeoCode(BaseModel):
     lat: float = Field(
         description="The location latitude"
     )
     lng: float = Field(
         description="The location longitude"
-)
+    )
+
+    @staticmethod
+    def from_doc(doc: Optional [Mapping [str, Any]]) -> Optional["GeoCode"]:
+        if doc:
+            return GeoCode(
+                lat=doc ["coordinates"] [1],
+                lng=doc ["coordinates"] [0]
+            )
+        return None
+    
+class Phone(BaseModel):
+    type: Optional [str] = Field(
+        description="The type of phone number (e.g., phone, fax).",
+        default=None
+    )
+    number: Optional [str] = Field(
+        description="The phone number.",
+        default=None
+    )
+    confidence: float = Field(
+        description="The confidence level of the phone number's accuracy.",
+        default=0.0
+    )
+
+    @staticmethod
+    def from_doc()
 
 class Address (BaseModel):
     address_line_1: Optional [str] = Field(

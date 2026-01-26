@@ -11,7 +11,23 @@ from fastapi import Request
 from optum_us_ml_gen_ai_common_basic.lang.listutil import add_items_when_not_none
 from pymongo import AsyncMongoClient
 
+from dto import SearchPlanInput, Provider , SearchResult, ProviderSummary, GeoCode, \
+LocationInput, SearchPlanResult, Plan , SearchPlanInput ,FindDetailInput
 from app.dto import SearchInput, Provider, SearchResult, GeoCode
+
+FLATTEN_DIR_NETWORK = {
+    #Flatten the array of arrays"
+    "$reduce": {
+        "input": "$directory_network",
+        "initialValue": [],
+        "in": {
+            "$concatArrays": ["$$value", "$$this"]
+        }
+    }
+}
+
+PROJ_ASSOCIATED_CPTS = "associated_cpts"
+REF_ASSOC_CPT = f"${PROJ_ASSOCIATED_CPTS}"
 
 
 class GapExceptionService (ABC):
@@ -30,73 +46,80 @@ class GapExceptionService (ABC):
         """
 
     @abstractmethod
-    async def find_by_key(
-        self,
-        key: str,
-        request: Request,
-        lat: Optional [float] = None,
-        lng: Optional [float] = None
-    ) -> Optional [Provider]:
+    async def find_provider_detail(
+            self,
+            key: str,
+            request: Request,
+    ) -> Provider:
         """
         Find a provider by its generated key.
     
-        :param key: The generated key of the provider
-        :param lat: Optional latitude for location context
-        :param lng: Optional longitude for location context
-        :param request: The incoming request
+        :param key: The input parameter
+        :param request: The FastAPI request. Only used for json_logging.
         :return: The provider if found, else None
-    """
+        """
+
+    @abstractmethod
+    async def search_plan(self, param: SearchPlanInput, request: Any) -> SearchPlanResult:
+        """
+        Find plan information based on the parameters..
+        
+        :param param: The search parameter
+        :param request: The FastAPI request. Only used for json_logging.
+        :return: List of plans
+        """
 
 class GapExceptionServiceImpl(GapExceptionService):
     def __init__(
             self,
             mongo: AsyncMongoClient,
             db_name: str,
-            collection_name: str,
-            index_name: str,
-            search_score_weight: float,
+            provider_collection_name: str,
+            provider_index_name: str,
+            plan_collection_name: str,
+            plan_index_name: str,
+            distance_weight: float,
             cpt_score_weight: float,
             provider_base_url: str,
-            logger: Logger
+            logger: Logger,
+            distance_pivot: int = 1000,
+            search_early_limit = 500
     ):
         self.mongo = mongo
         self.db_name = db_name
-        self.collection_name = collection_name
-        self.index_name = index_name
-        self.search_score_weight = search_score_weight
+        self.provider_collection_name = provider_collection_name
+        self.provider_index_name = provider_index_name
+        self.plan_collection_name = plan_collection_name
+        self.plan_index_name = plan_index_name
+        self.distance_weight = distance_weight
         self.cpt_score_weight = cpt_score_weight
         self.provider_base_url = provider_base_url
         self.logger = logger
+        self.distance_pivot = distance_pivot
+        self.search_early_limit = search_early_limit
 
     async def find_by_key(
             self,
-            key: str,
-            request: Request,
-            lat: Optional [float]  = None,
-            lng: Optional [float] = None
+            param: FindDetailInput,
+            request: Any,
     ) -> Optional [Provider]:
-        start_time = time.perf_counter()
-        query_result = await self.mongo [self.db_name] [self.collection_name].find_one({"_id": key})
+       start_time = time.perf_counter()
 
-        origin = None
-        if lat is not None and lng is not None:
-            origin = GeoCode(
-                lat=lat,
-                lng=lng
-            )
-        result = None
-        if query_result:
-            return Provider.from_doc(
-                query_result, 
-                self.provider_base_url, 
-                origin
-            )
+       mql = self.create_find_mql(param)
+       self.logger.info(f"For input: {param.model_dump_json()}, generated mql: {json.dumps(mql)}")
+       query_result = await self.mongo[self.db_name][self.provider_collection_name].aggregate(mql)
+       origin = param.get_search_origin()
 
-        elapsed_time_ms = int((time.perf_counter() - start_time) * 1000)
-        self.logger.info(
-            f"Provider found: (result is not None), elapsed time {elapsed_time_ms} ms for search with "
-            f"key: {key}, lat: {lat}, lng: {lng}, db name: {self.db_name}, collection name: {self.collection_name},"
-            f"index name: {self.index_name}"
+       result = None
+       async for doc in query_result:
+           result = Provider.from_doc(doc, origin)
+
+
+       elapsed_time_ms = int((time.perf_counter() - start_time) * 1000)
+       self.logger.info(
+           f"Provider found: {result is not None}, elapsed time {elapsed_time_ms} ms for search with "
+           f"key: {param.key}, db name: {self.db_name}, collection name: {self.provider_collection_name},"
+           f"index name: {self.provider_index_name}, param: {param.model_dump_json()}"
         )
         return result
     
