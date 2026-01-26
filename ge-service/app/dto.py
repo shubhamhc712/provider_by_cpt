@@ -20,6 +20,7 @@ def get_distance_in_miles(address, origin):
             ).miles,
             2
         )
+        return distance_in_miles
     return None
 
 class Code(BaseModel):
@@ -132,39 +133,102 @@ class Phone(BaseModel):
     )
 
     @staticmethod
-    def from_doc()
-
+    def from_doc(doc: Mapping[str, Any]) -> Optional["Phone"]:
+        if doc:
+            return Phone(
+                type=doc.get("type"),
+                number=doc.get("number"),
+                confidence=doc.get("confidence", 0.0)
+            )
+        return None
+    
 class Address (BaseModel):
-    address_line_1: Optional [str] = Field(
-         description="The first line of the address.",
-        default=None
+    display_address: str = Field(
+        description="The full display address.",
     )
-    city: Optional [str] = Field(
-        description="The city of the address.",
-        default=None
-    )
-    county: Optional [str] = Field(
-        description="The county of the address.",
-        default=None
-    )
-    state_code: Optional [str] = Field(
-        description="The state code of the address.",
-        default=None
-    )
-    zip_code: Optional [str] = Field(
-        description="The zip code of the address.",
-        default=None
-    )
-
-    geo_code: Optional [GeoCode] = Field(
+    geo_code: Optional[GeoCode]= Field(
         description="The geographical coordinates of the address.",
         default=None
     )
+    phone: List[Phone] = Field(
+        description="The phone numbers with the address.",
+        default=[]
+    )
+    distance_in_miles: Optional [float] = Field(
+        description="The distance from origin in miles.",
+        default=None
+    )
+
+    @staticmethod
+    def from_doc(
+        doc: Optional[Mapping[str, Any]],
+        origin: Optional[GeoCode],
+        summary: bool = False
+    ) ->Optional["Address"]:
+        if doc:
+            phones: List[Phone] = [Phone.from_doc(item) for item in doc.get("phones", [])]
+            if summary and len(phone) > 0:
+                best_phone = phones[0]
+                for phone in phones:
+                    if phone.type == "phone":
+                        if best_phone is None or phone.confidence > best_phone.confidence:
+                            best_phone = phone
+                phones = [best_phone]
+
+            return Address(
+                display_address=doc.get("displayAddress"),
+                geo_code=GeoCode.from_doc(doc.get("geoCode")),
+                phone=phones,
+                distance_in_miles=doc.get("distance")
+            )
+
+            return result
+        return None
+    
+class CptInfo(BaseModel):
+    code: str = Field(description = "The CPT code.")
+    claim_service_start_date: Optional[int] = Field(
+        description="Date when the service started, in YYYYMMDD format.",
+        default=None
+    )
+    weight: float = Field(
+        description="The weight associated with the CPT code for code the asscoiated provider.",
+        default=None
+    )
+    weight: float = Field(
+        description="The weight or relevance scrore of the CPT code for the associated provider.",
+    )
+
+class License (BaseModel):
+    number: str = Field(
+        description="The license number of the provider."
+    )
+    state: str = Field(
+        description="The state where the license is issued."
+    )
+    eff_dt: str = Field(
+        description="The effective date of the license.The format is YYYY-MM-DD."
+    )
+
+    exp_dt: str = Field(
+        description="Indicates whether the license is voided."
+    )
+
+    @staticmethod
+    def from_doc(doc: Mapping [str, Any]) :
+        return License(
+            number=doc.get("licenseNumber"),
+            state=doc.get("stateCode"),
+            eff_dt=doc.get("effectiveDate"),
+            exp_dt=doc.get("expirationDate"),
+            voided=doc.get("voidedIndicator") in {"Y", "y"}
+        )
 
 class Provider (BaseModel):
     key: str = Field(
         description="The unique identifier for the provider."
     )
+
     npi: str = Field(
         description="The National Provider Identifier (NPI) of the provider."
     )
@@ -176,73 +240,191 @@ class Provider (BaseModel):
         description="The gender of the provider",
         default=None
     )
-    degrees: Optional [List [Degree]] = Field(
-        description="The degree information of the provider",
+    addresses: List [Address] = Field(
+        description="The addresses of the provider.",
+        default=[]
+    )
+    primary_specialty: Optional [Code] = Field(
+        description="The primary specialty of the provider.",
         default=None
     )
-    virtual_care: Optional [bool] = Field(
-        description="Indicates if the provider offers virtual care.",
-        default=None
+    taxonomy_code: List [Code] = Field(
+        description="The taxonomy codes of the provider.",
+        default=[]
     )
-    specialty_description: Optional [List [str]] = Field(
-        description="The list of specialty descriptions for the provider.",
-        default=None
+
+    languages: List[Code] = Field(
+        description="The languages spoken by the provider.",
+        default=[]
     )
-    address: Optional [Address] = Field(
-        description="The address information of the provider.",
-        default=None
+    license: List[License] = Field(
+        description="The license of the provider.",
+        default=[]
     )
+    accept_new_patients: bool = Field(
+        description="Indicates if the provider accepts new patients.",
+        default=False
+    )
+    
+    accepted_cpts: List [CptInfo] = Field(
+        description="The associated CPT codes of the provider.",
+        default=[]
+    )
+
+    @staticmethod
+    def from_doc(doc: Mapping [str, Any], origin: Optional [GeoCode]):
+        address = [
+            Address.from_doc(iteam ,origin)
+            for item in doc.get("addresses", [])
+        ]
+
+        taxonomy_codes = [
+            Code(
+                code=item.get("taxonomycodeDesc"),
+                description=item.get("taxonomyDesc")
+            ) for item in doc.get("taxonomies", [])
+        ]
+
+        primary_taxonomy_doc = doc.get("primary_taxonomy_code")
+        primary_specialty = get_primary_specialty(primary_taxonomy_doc)
+        doc_languages = doc.get("languages", [])
+        languages = []
+        if doc_languages:
+                if isinstance(doc_languages, str):
+                    #Temporary code until the data is fixed
+                    languages =[
+                        Code(
+                            code=doc_languages,
+                            description=doc_languages
+                        )
+                    ]
+                else:                  
+                    languages = [
+                        Code(
+                            code=item.get("code"),
+                            description=item.get("description")
+                        ) for item in doc_languages
+                    ]
+
+        doc_licenses = doc.get("licenses", [])
+        licenses = []
+        if doc_licenses:
+            licenses = [
+                License.from_doc(item) for item in doc_licenses
+            ]
+        
+        cpt_docs = doc.get("associated_cpts", [])
+        if cpt_docs:
+            accepted_cpts = [
+                CptInfo(
+                    code=item.get("code"),
+                    claim_service_start_date=item.get("claimServiceStartDate"),
+                    weight=item.get("weight", 0.0)
+                ) for item in cpt_docs
+            ]
+        
+        else:
+            associated_cpts = []
+
+        return Provider(
+            key=doc ["ues_enterprise_provider_id"],
+            npi=doc.get("npi"),
+            full_name=doc.get("display_name"),
+            gender=doc.get("gender"),
+            addresses=addresses,
+            taxonomy_code=taxonomy_codes,
+            languages=languages,
+            license=licenses,
+            primary_specialty=primary_specialty,
+            accept_new_patients=doc.get("acceptNewPatients", False),
+            associated_cpts=associated_cpts
+        )
+    
+class ProviderSummary (BaseModel):
+    key: str = Field(
+        description="The unique identifier for the provider."
+    )
+
+    name: str = Field(
+        description="The name of the provider"
+    )
+
+    npi: Optional[str] = Field(
+        description="The National Provider Identifier (NPI) of the provider."
+    )
+
+    closest_address: Optional[Address] = Field(
+        description="The closest address of the provider",
+        default=None    
+    )
+    accept_new_patients: bool = Field(
+        description="Indicates if the provider accepts new patients.",
+        default=False
+    )
+
     web_url: str = Field(
-        description="The URL to the provider's detail page.",
+        description="The web URL of the provider."
+    )  
+
+    distance_in_miles: Optional[float] = Field(
+        description="The distance from search origin to the provider's location in miles.",
         default=None
     )
-    distance_in_miles: Optional [float] = Field(
-        description="The distance from the search origin to the provider's location in miles.",
+    primary_specialty: Optional [Code] = Field(
+        description="The primary specialty of the provider.",
         default=None
     )
 
     @staticmethod
-    def from_doc(doc: Mapping [str, Any], base_url: str, origin: Optional [GeoCode]):
-        distance_in_miles = None
-        
-        address = Address(
-            address_line_1=doc["address"].get("addressLine1"), city=doc["address"].get("cityName"), county=doc["address"].get("countyName"), zip_code=doc["address"].get("zipCode"),
-            state_code=doc["address"].get("stateName"),
-            country=doc ["address"].get("countryName"),
-            zip_code=doc ["address"].get("zipCode"),
-            geo_code=GeoCode(
-                lat=doc ["address"] ["geoCode"] ["coordinates"] [1],
-                lng=doc ["address"] ["geoCode"] ["coordinates"] [0]
-             ) if doc.get("address") and doc["address"].get("geoCode") else None 
-        ) if doc.get("address") else None
-
-        if origin is not None and address is not None and address.geo_code is not None:
-            distance_in_miles = round(
-                great_circle(
-                    (origin.lat, origin.lng),
-                    (address.geo_code.lat, address.geo_code.lng) 
-                ).miles,
-                2
-            )
-        return Provider(
-            key=doc ["generatedKey"],
-            npi=doc.get("npi") if doc.get("npi") else None, 
-            full_name=doc.get("provider", {}).get("fullName"),
-            gender=doc.get("provider", {}).get("gender"),
-            degrees=[
-                Degree(code=item.get("code"), description=item.get("description")) 
-                for item in doc.get("degree", [])
-            ],
-            virtual_care=doc.get("virtualCare", "N").upper() == "Y",
-            specialty_description=doc.get("speclDesc"),
-            address=address,
-            web_url=f"{base_url}/{doc['generatedKey']}",
-            distance_in_miles=distance_in_miles
+    def from_doc(doc: Mapping [str, Any], base_url: str, param: SearchInput):
+        closest_address = Address.from_doc(
+            doc.get("closest_address"),
+            origin = param.get_search_origin(),
+            summary=True
         )
-
+        origin = param.get_search_origin()
+        distance_in_miles = get_distance_in_miles(closest_address, origin)
+        url_params = ProviderSummary.create_web_url_params(doc, param)
+        primary_taxonomy_doc = doc.get("primary_taxonomy_code")
+        primary_specialty = get_primary_specialty(primary_taxonomy_doc)
+        web_url = f"{base_url}?{urldecode(url_params,doseq=True)}"
+        return ProviderSummary(
+            key=doc ["ues_enterprise_provider_id"],
+            name=doc.get("display_name"),
+            npi=doc.get("npi"),
+            closest_address=closest_address,
+            accept_new_patients=doc.get("acceptNewPatients", False),
+            web_url=web_url,
+            distance_in_miles=distance_in_miles,
+            primary_specialty=primary_specialty
+        )
+    @staticmethod
+    def create_web_url_params(
+        doc: Mapping [str, Any],
+        param: SearchInput
+    ) -> Mapping [str, Any]:
+        origin: param.get_search_origin()
+        url_params = {
+            "key": doc ["ues_enterprise_provider_id"],
+            "radius_in_meters": param.radius_in_meters
+        }
+        if origin:
+            url_params["lat"] = origin.lat
+            url_params["lng"] = origin.lng
+        network_ids = param.get_network_ids()
+        if network_ids:
+            url_params["network_ids"] = network_ids
+        cpt_codes = param.get_cpt_codes()
+        if cpt_codes:
+            url_params["cpt_codes"] = cpt_codes
+        return url_params
+    
 class SearchResult (BaseModel):
-    data: List [Provider] = Field(
-        description="The list of providers matching the search criteria."
+    paginated_data: List [ProviderSummary] = Field(
+        description="The paginated list of providers matching the search criteria."
+    )
+    total_count: int = Field(
+        description="The total number of providers matching the search criteria."
     )
 
 class ChatRequest (BaseModel):
@@ -263,13 +445,66 @@ class ChatRequest (BaseModel):
         default=None
     )
 
-class FindByKeyInput (BaseModel):
+class FindDetailInput (LocationInput):
     key: str = Field(
         description="Unique key to identify a provider"
     )
-    lat: float = Field(
-        description="The latitude of the search origin"
+    cpt_codes: Optional [List [str]] = Field(
+        description="The CPT code to search for.",
+        default=None,
     )
-    lng: float = Field(
-        description="The longitude of the search origin"
+    network_ids: List[str] = Field(
+        description="The latitude for location-based search.",
+        default=[]
+    )
+
+class FindByKeyResult (BaseModel):
+    data: Optional[Provider] = Field(
+        description="The provider details.",
+        default=None
+    )
+    input_param: FindDetailInput = Field(
+        description="The input parameters used for the search."
+    )
+
+class SearchPlansInput (BaseModel):
+    query: Optional [str] = Field(
+        description="The search query string.",
+        default=None
+    )
+
+    skip: int = Field(
+        description="Number of records to skip, for pagination. Default is 0.",
+        default=0
+    )
+
+    limit: int = Field(
+        description="Maximum number of results to return. Default is 10.",
+        default=10
+    )
+
+    def is_query_provided(self) -> bool:
+        return self.query is not None and (self.query.strip()) > 0
+    
+class Plan(BaseModel):
+    plaln_name: str = Field(
+        description="The name of the insurance plan."
+    )
+    pes_network_ids: List[str] = Field(
+        description="The insurance network IDs associated with the plan.",
+        default=[]
+    )
+    eff_dt: int = Field(
+        description="The effective date of the plan information, it will be as int with format YYYYMMDD (e.g., 20251110)."
+    )
+    exp_dt: int = Field(
+        description="The expiration date of the plan information, it will be as int with format YYYYMMDD (e.g., 20251110)."
+    )
+
+class SearchPlansResult (BaseModel):
+    paginated_data: List [Plan] = Field(
+        description="The paginated list of insurance plans matching the search criteria."
+    )
+    total_count: int = Field(
+        description="The total number of insurance plans matching the search criteria."
     )
